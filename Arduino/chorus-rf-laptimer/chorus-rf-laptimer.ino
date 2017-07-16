@@ -170,6 +170,11 @@ uint8_t sendQueueTail = 0;
 uint8_t isSendQueueFull = 0;
 
 //----- Lap timings--------------------------------
+
+uint16_t maxMeasuredRSSI = 0;
+uint32_t maxMeasuredRSSIDiff = 0;
+uint32_t maxMeasuredRSSILastMilliseconds = 0;
+
 uint32_t lastMilliseconds = 0;
 #define MIN_MIN_LAP_TIME 1 //seconds
 #define MAX_MIN_LAP_TIME 255 //seconds
@@ -255,35 +260,44 @@ void loop() {
     // check rssi threshold to identify when drone finishes the lap
     if (rssiThreshold > 0) { // threshold = 0 means that we don't check rssi values
         if(rssi > rssiThreshold) { // rssi above the threshold - drone is near
-            if (allowEdgeGeneration) {  // we haven't fired event for this drone proximity case yet
-                allowEdgeGeneration = 0;
-                gen_rising_edge(pinRaspiInt);  //generate interrupt for EasyRaceLapTimer software
-
+            if (isRaceStarted) { // if we're within the race, then log lap time
                 uint32_t now = millis();
                 uint32_t diff = now - lastMilliseconds;
+                
                 if (timeCalibrationConst) {
                     diff = diff + (int32_t)diff/timeCalibrationConst;
                 }
-                if (isRaceStarted) { // if we're within the race, then log lap time
-                    if (diff > minLapTime*1000 || (shouldSkipFirstLap && newLapIndex == 0)) { // if minLapTime haven't passed since last lap, then it's probably false alarm
-                        digitalLow(led);
-                        if (newLapIndex < MAX_LAPS-1) { // log time only if there are slots available
-                            lapTimes[newLapIndex] = diff;
-                            newLapIndex++;
-                            lastLapsNotSent++;
-                            addToSendQueue(SEND_LAST_LAPTIMES);
-                        }
-                        lastMilliseconds = now;
-                        playLapTones(); // during the race play tone sequence even if no more laps can be logged
+
+                if (diff > minLapTime*1000 || (shouldSkipFirstLap && newLapIndex == 0)) { // if minLapTime haven't passed since last lap, then it's probably false alarm
+                    digitalLow(led);
+
+                    if (rssi > maxMeasuredRSSI) {
+                        maxMeasuredRSSI = rssi;
+                        maxMeasuredRSSIDiff = diff;
+                        maxMeasuredRSSILastMilliseconds = now;
                     }
                 }
-                else {
-                    playLapTones(); // if not within the race, then play once per case
-                }
+            }
+            else {
+                playLapTones(); // if not within the race, then play once per case
             }
         }
-        else  {
-            allowEdgeGeneration = 1; // we're below the threshold, be ready to catch another case
+        else  if (rssi < rssiThreshold * 0.9){
+            if (isRaceStarted && maxMeasuredRSSI > 0 && maxMeasuredRSSIDiff > minLapTime * 1000) {
+                if (newLapIndex < MAX_LAPS-1) { // log time only if there are slots available
+                    lapTimes[newLapIndex] = maxMeasuredRSSIDiff;
+                    newLapIndex++;
+                    lastLapsNotSent++;
+                    addToSendQueue(SEND_LAST_LAPTIMES);
+                }
+                
+                lastMilliseconds = maxMeasuredRSSILastMilliseconds;
+                playLapTones(); // during the race play tone sequence even if no more laps can be logged
+
+                maxMeasuredRSSI = 0;
+                maxMeasuredRSSIDiff = 0;
+            }
+            
             digitalHigh(led);
         }
     }
@@ -828,23 +842,25 @@ void decThreshold() {
     }
 }
 // ----------------------------------------------------------------------------
+void calibrateThreshold() {
+    uint16_t median;
+    
+    for(uint8_t i=0; i < THRESHOLD_ARRAY_SIZE; i++) {
+        rssiThresholdArray[i] = getFilteredRSSI();
+    }
+    
+    sortArray(rssiThresholdArray, THRESHOLD_ARRAY_SIZE);
+    
+    median = getMedian(rssiThresholdArray, THRESHOLD_ARRAY_SIZE);
+    
+    if (median > MAGIC_THRESHOLD_REDUCE_CONSTANT) {
+        rssiThreshold = median - MAGIC_THRESHOLD_REDUCE_CONSTANT;
+        playSetThresholdTones();
+    }
+}
+
 void setThreshold() {
-    if (rssiThreshold == 0) {
-        uint16_t median;
-        for(uint8_t i=0; i < THRESHOLD_ARRAY_SIZE; i++) {
-            rssiThresholdArray[i] = getFilteredRSSI();
-        }
-        sortArray(rssiThresholdArray, THRESHOLD_ARRAY_SIZE);
-        median = getMedian(rssiThresholdArray, THRESHOLD_ARRAY_SIZE);
-        if (median > MAGIC_THRESHOLD_REDUCE_CONSTANT) {
-            rssiThreshold = median - MAGIC_THRESHOLD_REDUCE_CONSTANT;
-            playSetThresholdTones();
-        }
-    }
-    else {
-        rssiThreshold = 0;
-        playClearThresholdTones();
-    }
+    calibrateThreshold();
 }
 // ----------------------------------------------------------------------------
 uint16_t getFilteredRSSI() {
