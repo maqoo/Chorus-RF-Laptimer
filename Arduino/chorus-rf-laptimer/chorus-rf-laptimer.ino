@@ -590,9 +590,18 @@ void handleSerialControlInput(uint8_t *controlData, uint8_t length) {
         switch (controlByte) {
             case CONTROL_START_RACE: // start race
                 lastMilliseconds = millis();
+
+                maxMeasuredRSSI = 0;
+                maxMeasuredRSSIDiff = 0;
+                maxMeasuredRSSILastMilliseconds = 0;
+
+                nextMaxMeasuredRSSIDiff = 0;
+                nextMaxMeasuredRSSILastMilliseconds = 0;
+
                 DEBUG_CODE(
                     digitalHigh(serialTimerPin);
                 );
+                
                 newLapIndex = 0;
                 isRaceStarted = 1;
                 allowEdgeGeneration = 0;
