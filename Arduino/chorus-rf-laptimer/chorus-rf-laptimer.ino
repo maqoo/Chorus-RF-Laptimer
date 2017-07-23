@@ -175,6 +175,9 @@ uint16_t maxMeasuredRSSI = 0;
 uint32_t maxMeasuredRSSIDiff = 0;
 uint32_t maxMeasuredRSSILastMilliseconds = 0;
 
+uint32_t nextMaxMeasuredRSSIDiff = 0;
+uint32_t nextMaxMeasuredRSSILastMilliseconds = 0;
+
 uint32_t lastMilliseconds = 0;
 #define MIN_MIN_LAP_TIME 1 //seconds
 #define MAX_MIN_LAP_TIME 255 //seconds
@@ -275,6 +278,12 @@ void loop() {
                         maxMeasuredRSSI = rssi;
                         maxMeasuredRSSIDiff = diff;
                         maxMeasuredRSSILastMilliseconds = now;
+
+                        nextMaxMeasuredRSSIDiff = 0;
+                        nextMaxMeasuredRSSILastMilliseconds = 0;
+                    } else if (rssi == maxMeasuredRSSI) {
+                        nextMaxMeasuredRSSIDiff = diff;
+                        nextMaxMeasuredRSSILastMilliseconds = now;
                     }
                 }
             }
@@ -282,8 +291,13 @@ void loop() {
                 playLapTones(); // if not within the race, then play once per case
             }
         }
-        else  if (rssi < rssiThreshold * 0.9){
-            if (isRaceStarted && maxMeasuredRSSI > 0 && maxMeasuredRSSIDiff > minLapTime * 1000) {
+        else  if (rssi < rssiThreshold * 0.95) {
+            if (isRaceStarted && maxMeasuredRSSI > 0) {
+                if (nextMaxMeasuredRSSIDiff > 0 && maxMeasuredRSSILastMilliseconds > 0) {
+                    maxMeasuredRSSIDiff = nextMaxMeasuredRSSIDiff - (nextMaxMeasuredRSSIDiff - maxMeasuredRSSIDiff) / 2;
+                    maxMeasuredRSSILastMilliseconds = nextMaxMeasuredRSSILastMilliseconds - (nextMaxMeasuredRSSILastMilliseconds - maxMeasuredRSSILastMilliseconds) / 2;
+                }
+
                 if (newLapIndex < MAX_LAPS-1) { // log time only if there are slots available
                     lapTimes[newLapIndex] = maxMeasuredRSSIDiff;
                     newLapIndex++;
@@ -296,6 +310,9 @@ void loop() {
 
                 maxMeasuredRSSI = 0;
                 maxMeasuredRSSIDiff = 0;
+
+                nextMaxMeasuredRSSIDiff = 0;
+                nextMaxMeasuredRSSILastMilliseconds = 0;
             }
             
             digitalHigh(led);
@@ -589,6 +606,8 @@ void handleSerialControlInput(uint8_t *controlData, uint8_t length) {
                 break;
             case CONTROL_START_CALIBRATE: // start calibration
                 calibrationMilliseconds = millis();
+                isCalibrated = 0;
+                addToSendQueue(SEND_CALIBR_STATE);
                 break;
             case CONTROL_END_RACE: // end race
                 isRaceStarted = 0;
